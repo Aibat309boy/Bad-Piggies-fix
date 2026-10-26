@@ -1,0 +1,7 @@
+<linker>
+    <!-- Fix animation curves in levels -->
+
+    <assembly fullname="UnityEngine.CoreModule">
+        <type fullname="UnityEngine.AnimationCurve" preserve="all"/>
+    </assembly>     
+</linker>
