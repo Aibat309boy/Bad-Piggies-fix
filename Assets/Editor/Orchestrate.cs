@@ -11,7 +11,7 @@ public static class Orchestrate
 	public static readonly string ProjectPath =
 		Application.dataPath.Substring(0, Application.dataPath.LastIndexOf('/'));
 
-	public static readonly string SourcePath = Path.Combine(ProjectPath, "Assets", "assetbundles");
+	public static readonly string SourcePath = Path.Combine(ProjectPath, "Assets", "AssetBundles");
 
 	public static readonly string CachePath = Path.Combine(ProjectPath, "Library", "BuiltAssetBundles");
 
@@ -180,6 +180,10 @@ public static class Orchestrate
 		{
 			BundleForTarget(GetTargetFromPlatform(platform));
 		}
+
+		string activeTargetPath = Path.Combine(CachePath, EditorUserBuildSettings.activeBuildTarget.ToString());
+		if (Directory.Exists(activeTargetPath))
+			CopyBundlesToStreamingAssets(EditorUserBuildSettings.activeBuildTarget);
 	}
 
 	[MenuItem("BP/Bundle/Windows x32")]
@@ -232,16 +236,8 @@ public static class Orchestrate
 
 	static void BuildForPlatform(Platform platform)
 	{
-		if (Directory.Exists(StreamPath))
-		{
-			Directory.Delete(StreamPath, true);
-			File.Delete(StreamPath + ".meta");
-		}
-
 		BuildTarget target = GetTargetFromPlatform(platform);
-
-		Directory.CreateDirectory(StreamPath);
-		CopyFilesRecursively(Path.Combine(CachePath, target.ToString()), StreamPath);
+		CopyBundlesToStreamingAssets(target);
 
 		string[] scenes = EditorBuildSettings.scenes
 			.Where(scene => scene.enabled)
@@ -283,21 +279,10 @@ public static class Orchestrate
 		}
 
 		Debug.Log($"Built game: {options.locationPathName}");
-
-		Directory.Delete(StreamPath, true);
-		File.Delete(StreamPath + ".meta");
 	}
 
 	static void BundleForTarget(BuildTarget target)
 	{
-		string targetPath = Path.Combine(CachePath, target.ToString());
-		if (Directory.Exists(targetPath) && !BundleSourceChanged(targetPath))
-		{
-			Debug.Log("Assets already exists. If refreshing is needed, use BP > Bundle > Clear");
-			return;
-		}
-		if (Directory.Exists(targetPath)) Directory.Delete(targetPath, true);
-
 		string[] guids = AssetDatabase.FindAssets(string.Empty, new[]
 		{
 			Path.GetRelativePath(ProjectPath, SourcePath)
@@ -306,6 +291,7 @@ public static class Orchestrate
 		if (guids.Length == 0)
 			throw new Exception($"No assets in: {SourcePath}");
 
+		bool assetBundleNamesChanged = false;
 		foreach (string guid in guids)
 		{
 			string path = AssetDatabase.GUIDToAssetPath(guid);
@@ -313,7 +299,12 @@ public static class Orchestrate
 			if (AssetDatabase.IsValidFolder(path)) continue;
 
 			AssetImporter importer = AssetImporter.GetAtPath(path);
-			importer.assetBundleName = Path.GetFileName(Path.GetDirectoryName(path));
+			string assetBundleName = GetAssetBundleName(path);
+			if (importer.assetBundleName != assetBundleName)
+			{
+				importer.assetBundleName = assetBundleName;
+				assetBundleNamesChanged = true;
+			}
 
 			Debug.Log($"Imported asset: {importer.assetBundleName} => {path}");
 		}
@@ -321,10 +312,44 @@ public static class Orchestrate
 		AssetDatabase.RemoveUnusedAssetBundleNames();
 		AssetDatabase.SaveAssets();
 
+		string targetPath = Path.Combine(CachePath, target.ToString());
+		if (Directory.Exists(targetPath) && !assetBundleNamesChanged && !BundleSourceChanged(targetPath))
+		{
+			CopyBundlesToStreamingAssets(target);
+			Debug.Log("Assets already exists. If refreshing is needed, use BP > Bundle > Clear");
+			return;
+		}
+		if (Directory.Exists(targetPath)) Directory.Delete(targetPath, true);
+
 		Directory.CreateDirectory(targetPath);
 
 		BuildPipeline.BuildAssetBundles(targetPath, BuildAssetBundleOptions.ChunkBasedCompression, target);
+		CopyBundlesToStreamingAssets(target);
 		Debug.Log($"Built asset bundle: {targetPath}");
+	}
+
+	static string GetAssetBundleName(string assetPath)
+	{
+		string directoryName = Path.GetFileName(Path.GetDirectoryName(assetPath));
+		string extension = Path.GetExtension(directoryName);
+		string[] nameParts = Path.GetFileNameWithoutExtension(directoryName).Split('_');
+
+		for (int i = 0; i < nameParts.Length; i++)
+		{
+			if (nameParts[i].Length > 0)
+				nameParts[i] = char.ToUpperInvariant(nameParts[i][0]) + nameParts[i].Substring(1);
+		}
+
+		return string.Join("_", nameParts) + extension;
+	}
+
+	static void CopyBundlesToStreamingAssets(BuildTarget target)
+	{
+		if (Directory.Exists(StreamPath)) Directory.Delete(StreamPath, true);
+		if (File.Exists(StreamPath + ".meta")) File.Delete(StreamPath + ".meta");
+
+		Directory.CreateDirectory(StreamPath);
+		CopyFilesRecursively(Path.Combine(CachePath, target.ToString()), StreamPath);
 	}
 
 	static bool BundleSourceChanged(string targetPath)
